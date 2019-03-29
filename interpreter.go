@@ -3,6 +3,7 @@ package ipfix
 import (
 	"crypto/md5"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"net"
@@ -155,13 +156,17 @@ func (i *Interpreter) InterpretInto(rec DataRecord, fieldList []InterpretedField
 		fieldList = fieldList[:len(tpl)]
 	}
 
+	var err error
 	for j, field := range tpl {
 		fieldList[j].FieldID = field.FieldID
 		fieldList[j].EnterpriseID = field.EnterpriseID
 
 		if entry, ok := i.dictionary[dictionaryKey{field.EnterpriseID, field.FieldID}]; ok {
 			fieldList[j].Name = entry.Name
-			fieldList[j].Value = interpretBytes(&rec.Fields[j], entry.Type)
+			fieldList[j].Value, err = interpretBytes(&rec.Fields[j], entry.Type)
+			if err != nil {
+				fieldList[j].RawValue = rec.Fields[j]
+			}
 		} else {
 			fieldList[j].RawValue = rec.Fields[j]
 		}
@@ -194,10 +199,10 @@ func (i *Interpreter) AddDictionaryEntry(e DictionaryEntry) {
 
 var md5HashSalt = []byte(os.Getenv("IPFIX_IP_HASH"))
 
-func interpretBytes(bs *[]byte, t FieldType) interface{} {
+func interpretBytes(bs *[]byte, t FieldType) (interface{}, error) {
 	if len(*bs) < t.minLength() {
 		// Field is too short (corrupt) - return it uninterpreted.
-		return *bs
+		return *bs, errors.New("Field is too short (corrupt)")
 	}
 
 	switch t {
@@ -206,48 +211,48 @@ func interpretBytes(bs *[]byte, t FieldType) interface{} {
 			h := md5.New()
 			h.Write(md5HashSalt)
 			h.Write(*bs)
-			return fmt.Sprintf("%x", h.Sum(nil))
+			return fmt.Sprintf("%x", h.Sum(nil)), nil
 		}
-		return (*net.IP)(bs)
+		return (*net.IP)(bs), nil
 	case Uint8:
-		return uint8(number(*bs))
+		return uint8(number(*bs)), nil
 	case Uint16:
-		return uint16(number(*bs))
+		return uint16(number(*bs)), nil
 	case Uint32:
-		return uint32(number(*bs))
+		return uint32(number(*bs)), nil
 	case Uint64:
-		return uint64(number(*bs))
+		return uint64(number(*bs)), nil
 	case Int8:
-		return int8(number(*bs))
+		return int8(number(*bs)), nil
 	case Int16:
-		return int16(number(*bs))
+		return int16(number(*bs)), nil
 	case Int32:
-		return int32(number(*bs))
+		return int32(number(*bs)), nil
 	case Int64:
-		return int64(number(*bs))
+		return int64(number(*bs)), nil
 	case Float32:
-		return math.Float32frombits(binary.BigEndian.Uint32(*bs))
+		return math.Float32frombits(binary.BigEndian.Uint32(*bs)), nil
 	case Float64:
-		return math.Float64frombits(binary.BigEndian.Uint64(*bs))
+		return math.Float64frombits(binary.BigEndian.Uint64(*bs)), nil
 	case Boolean:
-		return (*bs)[0] == 1
+		return (*bs)[0] == 1, nil
 	case Unknown, MacAddress, OctetArray:
-		return *bs
+		return *bs, nil
 	case String:
-		return string(*bs)
+		return string(*bs), nil
 	case DateTimeSeconds:
-		return time.Unix(int64(binary.BigEndian.Uint32(*bs)), 0)
+		return time.Unix(int64(binary.BigEndian.Uint32(*bs)), 0), nil
 	case DateTimeMilliseconds:
 		unixTimeMs := int64(binary.BigEndian.Uint64(*bs))
-		return time.Unix(0, 0).Add(time.Duration(unixTimeMs) * time.Millisecond)
+		return time.Unix(0, 0).Add(time.Duration(unixTimeMs) * time.Millisecond), nil
 	case DateTimeMicroseconds:
 		unixTimeUs := int64(binary.BigEndian.Uint64(*bs))
-		return time.Unix(0, 0).Add(time.Duration(unixTimeUs) * time.Microsecond)
+		return time.Unix(0, 0).Add(time.Duration(unixTimeUs) * time.Microsecond), nil
 	case DateTimeNanoseconds:
 		unixTimeNs := int64(binary.BigEndian.Uint64(*bs))
-		return time.Unix(0, 0).Add(time.Duration(unixTimeNs))
+		return time.Unix(0, 0).Add(time.Duration(unixTimeNs)), nil
 	}
-	return *bs
+	return *bs, nil
 }
 
 func number(bs []byte) uint64 {
